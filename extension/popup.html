@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="popup">
+    <header>
+      <div class="logo-row">
+        <div class="orb"></div>
+        <h1>Mirra</h1>
+      </div>
+      <p class="tagline">mindful social media</p>
+    </header>
+
+    <section class="fields">
+      <div class="field">
+        <label for="agentId">Agent ID</label>
+        <input type="text" id="agentId" placeholder="paste agent id…" spellcheck="false" />
+      </div>
+      <div class="field">
+        <label for="apiKey">API Key <span class="optional">(optional for public agents)</span></label>
+        <input type="password" id="apiKey" placeholder="paste api key…" spellcheck="false" />
+      </div>
+      <div class="field">
+        <label for="demoApp">Demo Mode</label>
+        <select id="demoApp">
+          <option value="">Auto-detect from URL</option>
+          <option value="Instagram">Instagram</option>
+          <option value="TikTok">TikTok</option>
+          <option value="YouTube">YouTube</option>
+        </select>
+      </div>
+    </section>
+
+    <div class="actions">
+      <button id="save" class="btn-primary">Save</button>
+      <button id="test" class="btn-secondary">Test on this page</button>
+    </div>
+
+    <p id="status" class="status"></p>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
