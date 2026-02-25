@@ -5,7 +5,7 @@
  *   2. Inject content script on-demand for "Test on this page" demo mode
  */
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // ── Signed URL fetch ──────────────────────────────
   if (message.type === 'GET_SIGNED_URL') {
@@ -13,6 +13,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then(url  => sendResponse({ signedUrl: url }))
       .catch(err => sendResponse({ error: err.message }))
     return true // keep channel open for async response
+  }
+
+  // ── Close / navigate away from tab ────────────────
+  if (message.type === 'CLOSE_TAB') {
+    const tabId = sender.tab?.id
+    if (!tabId) return false
+    chrome.tabs.goBack(tabId, () => {
+      // If goBack fails (no history), open new tab page instead
+      if (chrome.runtime.lastError) {
+        chrome.tabs.update(tabId, { url: 'chrome://newtab' })
+      }
+    })
+    return false
   }
 
   // ── Demo: inject overlay on arbitrary page ────────

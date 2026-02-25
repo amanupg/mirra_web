@@ -47,6 +47,11 @@ $test.addEventListener('click', () => {
   )
 })
 
+// ── Open Dashboard ──────────────────────
+$id('dashboard').addEventListener('click', () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL('dashboard.html') })
+})
+
 function flash(msg, isError = false) {
   $status.textContent = msg
   $status.className = 'status' + (isError ? ' error' : '')
