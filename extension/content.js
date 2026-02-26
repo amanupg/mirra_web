@@ -1172,17 +1172,38 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
 
   /* ================================================================
    *  §6.5 — TTS UTILITY (speaks screen headings)
+   *  Uses the SAME voice as the conversational agent — fetches the
+   *  agent's voice_id from ElevenLabs on first call, then caches it.
    * ================================================================ */
 
   let _ttsAudio = null
+  let _agentVoiceId = null
+  let _agentVoiceModel = null
 
   async function mirraSpeak(text) {
     if (conversationActive) return
     try {
       if (_ttsAudio) { _ttsAudio.pause(); _ttsAudio = null }
-      const { apiKey } = await chrome.storage.sync.get('apiKey')
-      if (!apiKey) return
-      const response = await fetch('https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM', {
+      const { apiKey, agentId } = await chrome.storage.sync.get(['apiKey', 'agentId'])
+      if (!apiKey || !agentId) return
+
+      if (!_agentVoiceId) {
+        const agentRes = await fetch(
+          `https://api.elevenlabs.io/v1/convai/agents/${agentId}`,
+          { headers: { 'xi-api-key': apiKey } }
+        )
+        if (agentRes.ok) {
+          const cfg = await agentRes.json()
+          const tts = cfg.conversation_config?.tts
+            || cfg.conversation_config?.agent?.tts
+          _agentVoiceId = tts?.voice_id || cfg.voice?.voice_id || null
+          _agentVoiceModel = tts?.model_id || null
+        }
+      }
+
+      if (!_agentVoiceId) return // loaded from extension popup — never hardcode
+
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${_agentVoiceId}`, {
         method: 'POST',
         headers: {
           'xi-api-key': apiKey,
@@ -1190,7 +1211,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
         },
         body: JSON.stringify({
           text,
-          model_id: 'eleven_turbo_v2',
+          model_id: _agentVoiceModel || 'eleven_turbo_v2',
           voice_settings: { stability: 0.5, similarity_boost: 0.75 }
         })
       })
@@ -1417,22 +1438,26 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       shadow.appendChild(wrap)
 
       wrap.querySelector('[data-action="done"]').addEventListener('click', () => {
+        mirraSpeak("nice. you got what you came for. that's intentional.")
         this._cleanup()
         try { chrome.runtime.sendMessage({ type: 'CLOSE_TAB' }) } catch (_) {}
       })
       wrap.querySelector('[data-action="3min"]').addEventListener('click', () => {
+        mirraSpeak("okay, 3 more. make 'em count.")
         this._dismissCheckin()
         this._remaining = CONFIG.CHECK_IN_TIMER_DURATION
         this._injectWidget()
         this._startCountdown()
       })
       wrap.querySelector('[data-action="5min"]').addEventListener('click', () => {
+        mirraSpeak("5 more mins. I'll be here.")
         this._dismissCheckin()
         this._remaining = CONFIG.CHECK_IN_TIMER_DURATION
         this._injectWidget()
         this._startCountdown()
       })
       wrap.querySelector('[data-action="lying"]').addEventListener('click', () => {
+        mirraSpeak("no judgment. happens to literally everyone. try this instead.")
         this._showRedirectScreen(shadow, wrap)
       })
 
@@ -1460,10 +1485,12 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       shadow.appendChild(wrap)
 
       wrap.querySelector('[data-action="good"]').addEventListener('click', () => {
+        mirraSpeak("love that. go do the thing.")
         this._cleanup()
         try { chrome.runtime.sendMessage({ type: 'CLOSE_TAB' }) } catch (_) {}
       })
       wrap.querySelector('[data-action="stay"]').addEventListener('click', () => {
+        mirraSpeak("alright, your call.")
         this._cleanup()
       })
     }
@@ -1592,6 +1619,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       this._sheetShadow.appendChild(sheet)
 
       sheet.querySelector('[data-action="done"]').addEventListener('click', () => {
+        mirraSpeak("glad you're good. go be great.")
         this._removeSheet()
       })
       sheet.querySelector('[data-action="scrolling"]').addEventListener('click', () => {
@@ -1599,6 +1627,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
         this._showPersonalizedRedirect()
       })
       sheet.querySelector('[data-action="overwhelmed"]').addEventListener('click', () => {
+        mirraSpeak("hey. I hear you. I'm right here.")
         this._removeSheet()
         this._showLowMoodOverlay()
       })
@@ -1969,7 +1998,10 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       this.ambientEl = this.shadow.querySelector('.mirra-ambient')
       this.bypassBtn = this.shadow.querySelector('.mirra-bypass')
 
-      this.bypassBtn.addEventListener('click', () => this._letThrough())
+      this.bypassBtn.addEventListener('click', () => {
+        mirraSpeak("fair enough. I'll get out of your way.")
+        this._letThrough()
+      })
 
       ;(document.documentElement || document.body).appendChild(this.root)
     }
@@ -2183,6 +2215,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
     }
 
     _showSupportBlock() {
+      mirraSpeak("you don't have to sit with that alone. here are people who get it.")
       const btn = this._screenContainer?.querySelector('[data-action="support"]')
       if (btn) btn.style.display = 'none'
       const input = this._screenContainer?.querySelector('.mirra-text-input')
@@ -2215,6 +2248,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
     }
 
     _navigateAway() {
+      mirraSpeak("good call. go do something that actually fills you up.")
       if (this.client) { this.client.stop(); this.client = null }
       try { chrome.runtime.sendMessage({ type: 'CLOSE_TAB' }) } catch (_) {}
       this._unblurPage()
