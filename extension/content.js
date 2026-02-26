@@ -1999,8 +1999,18 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       this.bypassBtn = this.shadow.querySelector('.mirra-bypass')
 
       this.bypassBtn.addEventListener('click', () => {
-        mirraSpeak("fair enough. I'll get out of your way.")
-        this._letThrough()
+        if (!breakupModeDoneThisSession) {
+          if (this.client) { this.client.stop(); this.client = null }
+          if (this.root) { this.root.remove(); this.root = null }
+          new MirraBreakup(() => {
+            this._unblurPage()
+            const timer = new MirraTimer()
+            timer.start(CONFIG.CHECK_IN_TIMER_DURATION)
+          }).show()
+        } else {
+          mirraSpeak("fair enough. I'll get out of your way.")
+          this._letThrough()
+        }
       })
 
       ;(document.documentElement || document.body).appendChild(this.root)
