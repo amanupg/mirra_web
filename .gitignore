@@ -1,0 +1,27 @@
+# Environment and secrets
+.env
+*.env
+.env.*
+!.env.example
+config.local.js
+secrets.js
+*.key
+*.pem
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Logs
+*.log

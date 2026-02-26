@@ -25,6 +25,10 @@
         <input type="password" id="apiKey" placeholder="paste api key…" spellcheck="false" />
       </div>
       <div class="field">
+        <label for="humeApiKey">Hume API Key <span class="optional">(when emotion detection is enabled)</span></label>
+        <input type="password" id="humeApiKey" placeholder="hume_..." spellcheck="false" />
+      </div>
+      <div class="field">
         <label for="demoApp">Demo Mode</label>
         <select id="demoApp">
           <option value="">Auto-detect from URL</option>
@@ -40,7 +44,7 @@
       <button id="test" class="btn-secondary">Test on this page</button>
     </div>
 
-    <button id="dashboard" class="btn-dashboard">View Dashboard</button>
+    <button id="dashboard" class="btn-dashboard">how am I doing?</button>
 
     <p id="status" class="status"></p>
   </div>

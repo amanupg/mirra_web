@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Mirra",
-  "description": "Digital wellbeing companion — mindful social media use",
+  "description": "Not your standard app blocker. Just checking in.",
   "version": "1.0.0",
 
   "permissions": [
@@ -14,7 +14,8 @@
     "*://www.instagram.com/*",
     "*://www.tiktok.com/*",
     "*://www.youtube.com/*",
-    "https://api.elevenlabs.io/*"
+    "https://api.elevenlabs.io/*",
+    "https://api.hume.ai/*"
   ],
 
   "background": {
@@ -28,7 +29,7 @@
         "*://www.tiktok.com/*",
         "*://www.youtube.com/*"
       ],
-      "js": ["content.js"],
+      "js": ["config.js", "hume.js", "content.js"],
       "run_at": "document_start"
     }
   ],

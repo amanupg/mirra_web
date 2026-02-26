@@ -58,7 +58,7 @@ export default function App() {
       onAgentMessage: (text) => addMessage('agent', text),
       onUserTranscript: (text) => addMessage('user', text),
       onError: (err) => {
-        console.error('[Mirra]', err)
+        console.error('[NYM]', err)
         setStatus('error')
       },
       onDisconnect: () => {

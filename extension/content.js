@@ -6,7 +6,8 @@
 
   // Session bypass counter (resets on page load)
   let bypassCount = 0
-  let breakupDismissed = false
+  let breakupModeDoneThisSession = false
+  let conversationActive = false
 
   /* ================================================================
    *  §1 — OVERLAY CSS (injected into shadow DOM)
@@ -632,6 +633,19 @@
    *  §3 — MOOD CLASSIFIER
    * ================================================================ */
 
+  /*
+   * KEYWORD CLASSIFIER — active when CONFIG.HUME_ENABLED = false
+   *
+   * Directionally accurate for demo and early production.
+   * Replaced entirely by HumeEmotionDetector when toggle is on.
+   * Hume detects emotion from voice prosody in real-time — catches
+   * stress in "I'm fine", distinguishes loneliness from sadness,
+   * returns continuous confidence scores instead of binary matches.
+   *
+   * To enable: set CONFIG.HUME_ENABLED = true in config.js
+   * and add your Hume API key in the extension popup.
+   */
+
   const STRESSED_WORDS = [
     'overwhelmed','anxious','stressed','deadline','pressure',
     'too much','exam','panic','falling apart','nervous',
@@ -669,6 +683,13 @@
     if (low > 0) return 'LOW_MOOD'
     return 'NEUTRAL'
   }
+
+  function classifyBypass(text) {
+    const t = text.toLowerCase()
+    return BYPASS_WORDS.some(w => t.includes(w))
+  }
+
+  let humeDetector = null
 
   /* ================================================================
    *  §4 — MIRRA SYSTEM PROMPT
@@ -757,8 +778,8 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
         </div>
       </div>
       <div class="mirra-btn-row">
-        <button class="mirra-btn mirra-btn-primary" data-action="proceed">Yes, I\u2019m ready</button>
-        <button class="mirra-btn mirra-btn-secondary" data-action="alt">Let me do something else</button>
+        <button class="mirra-btn mirra-btn-primary" data-action="proceed">yeah let me in</button>
+        <button class="mirra-btn mirra-btn-secondary" data-action="alt">actually nah</button>
       </div>
     `
     el.querySelector('[data-action="proceed"]').addEventListener('click', onProceed)
@@ -787,10 +808,10 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       </div>
       <h3 style="font-size:16px;font-weight:400;margin-top:28px;margin-bottom:16px;color:rgba(232,230,240,0.85);text-align:center;">Then, do you still want to open Instagram?</h3>
       <div class="mirra-btn-row">
-        <button class="mirra-btn mirra-btn-primary" data-action="support">I need real support</button>
-        <button class="mirra-btn mirra-btn-secondary" data-action="moment">I just need a moment</button>
+        <button class="mirra-btn mirra-btn-primary" data-action="support">I need to talk to someone</button>
+        <button class="mirra-btn mirra-btn-secondary" data-action="moment">I just need a sec</button>
       </div>
-      <button class="mirra-link" data-action="open">Open Instagram anyway</button>
+      <button class="mirra-link" data-action="open">open it anyway</button>
     `
     el.querySelector('[data-action="support"]').addEventListener('click', onSupport)
     el.querySelector('[data-action="moment"]').addEventListener('click', onMoment)
@@ -842,7 +863,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
           <button class="mirra-reco-action" data-action="close">Start Exercise</button>
         </div>
       </div>
-      <button class="mirra-link" data-action="open">I still want to open Instagram</button>
+      <button class="mirra-link" data-action="open">nah I\u2019m opening it</button>
     `
     el.querySelectorAll('[data-action="close"]').forEach(btn => {
       btn.addEventListener('click', onSoundsGood)
@@ -886,7 +907,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
     const el = document.createElement('div')
     el.className = 'mirra-screen'
     el.innerHTML = `
-      <div class="mirra-profile-badge">Based on your profile \u2726</div>
+      <div class="mirra-profile-badge">we know you a little \uD83D\uDC40</div>
       <h2>Here\u2019s something better for you right now:</h2>
       <div class="mirra-reco-card">
         <div class="mirra-reco-icon">\uD83D\uDCDA</div>
@@ -967,6 +988,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
 
     stop() {
       this._dead = true
+      conversationActive = false
       this._closeMic()
       this._stopPlay()
       if (this.playCtx) { try { this.playCtx.close() } catch (_) {} this.playCtx = null }
@@ -995,6 +1017,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       this.ws = new WebSocket(url)
       this.ws.onopen = () => {
         if (this._dead) return
+        conversationActive = true
         this.onStatus('connected')
         this._send({
           type: 'conversation_initiation_client_data',
@@ -1011,8 +1034,8 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
         })
       }
       this.ws.onmessage = (e) => { if (!this._dead) this._route(JSON.parse(e.data)) }
-      this.ws.onclose   = () => { if (!this._dead) this.onEnd() }
-      this.ws.onerror   = () => { if (!this._dead) { this.onError('WebSocket error'); this.onStatus('error') } }
+      this.ws.onclose   = () => { conversationActive = false; if (!this._dead) this.onEnd() }
+      this.ws.onerror   = () => { conversationActive = false; if (!this._dead) { this.onError('WebSocket error'); this.onStatus('error') } }
     }
 
     /* ── message router ─────────────── */
@@ -1145,6 +1168,38 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
     _send(data) {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(data))
     }
+  }
+
+  /* ================================================================
+   *  §6.5 — TTS UTILITY (speaks screen headings)
+   * ================================================================ */
+
+  let _ttsAudio = null
+
+  async function mirraSpeak(text) {
+    if (conversationActive) return
+    try {
+      if (_ttsAudio) { _ttsAudio.pause(); _ttsAudio = null }
+      const { apiKey } = await chrome.storage.sync.get('apiKey')
+      if (!apiKey) return
+      const response = await fetch('https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM', {
+        method: 'POST',
+        headers: {
+          'xi-api-key': apiKey,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          text,
+          model_id: 'eleven_turbo_v2',
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+        })
+      })
+      if (!response.ok) return
+      const blob = await response.blob()
+      const url = URL.createObjectURL(blob)
+      _ttsAudio = new Audio(url)
+      _ttsAudio.play()
+    } catch (e) { /* TTS non-critical */ }
   }
 
   /* ================================================================
@@ -1345,15 +1400,17 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       style.textContent = TIMER_CSS
       shadow.appendChild(style)
 
+      mirraSpeak("hey — so did you find what you came for?")
+
       const wrap = document.createElement('div')
       wrap.className = 'mirra-checkin'
       wrap.innerHTML = `
-        <h2>Hey \u2014 did you get what you needed?</h2>
+        <h2>so... did you find what you came for?</h2>
         <div class="mirra-checkin-btns">
-          <button class="mirra-checkin-btn primary" data-action="done">\u2705 Yes, I\u2019m done</button>
-          <button class="mirra-checkin-btn secondary" data-action="3min">\u23F1 Give me 3 more minutes</button>
-          <button class="mirra-checkin-btn secondary" data-action="5min">\u23F1 Need 5 more minutes</button>
-          <button class="mirra-checkin-btn warn" data-action="lying">\uD83D\uDE2C Okay I was lying</button>
+          <button class="mirra-checkin-btn primary" data-action="done">I\u2019m done, close it</button>
+          <button class="mirra-checkin-btn secondary" data-action="3min">3 more mins please</button>
+          <button class="mirra-checkin-btn secondary" data-action="5min">just 5 more mins</button>
+          <button class="mirra-checkin-btn warn" data-action="lying">okay I lied lol</button>
         </div>
         <div class="mirra-checkin-brand">mirra</div>
       `
@@ -1365,13 +1422,13 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       })
       wrap.querySelector('[data-action="3min"]').addEventListener('click', () => {
         this._dismissCheckin()
-        this._remaining = 10
+        this._remaining = CONFIG.CHECK_IN_TIMER_DURATION
         this._injectWidget()
         this._startCountdown()
       })
       wrap.querySelector('[data-action="5min"]').addEventListener('click', () => {
         this._dismissCheckin()
-        this._remaining = 10
+        this._remaining = CONFIG.CHECK_IN_TIMER_DURATION
         this._injectWidget()
         this._startCountdown()
       })
@@ -1395,7 +1452,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
           <div class="mirra-redirect-text">${suggestion.text}</div>
         </div>
         <div class="mirra-checkin-btns">
-          <button class="mirra-checkin-btn primary" data-action="good">Sounds good</button>
+          <button class="mirra-checkin-btn primary" data-action="good">yeah that sounds good</button>
           <button class="mirra-checkin-btn secondary" data-action="stay">I still want to stay</button>
         </div>
         <div class="mirra-checkin-brand">mirra</div>
@@ -1518,15 +1575,17 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       style.textContent = CHECKIN_SHEET_CSS
       this._sheetShadow.appendChild(style)
 
+      mirraSpeak("hey, you've been here a while. what pulled you in?")
+
       const sheet = document.createElement('div')
       sheet.className = 'mirra-sheet'
       sheet.innerHTML = `
         <div class="mirra-sheet-handle"></div>
         <h2>Hey \u2014 you\u2019ve been here a while.<br>What pulled you in?</h2>
         <div class="mirra-sheet-btns">
-          <button class="mirra-sheet-btn primary" data-action="done">Found what I needed \uD83D\uDC4D</button>
-          <button class="mirra-sheet-btn secondary" data-action="scrolling">Still scrolling \uD83D\uDE05</button>
-          <button class="mirra-sheet-btn secondary" data-action="overwhelmed">I\u2019m feeling overwhelmed</button>
+          <button class="mirra-sheet-btn primary" data-action="done">yeah I\u2019m good</button>
+          <button class="mirra-sheet-btn secondary" data-action="scrolling">okay I got distracted</button>
+          <button class="mirra-sheet-btn secondary" data-action="overwhelmed">I\u2019m not okay rn</button>
         </div>
         <div class="mirra-sheet-brand">mirra</div>
       `
@@ -1585,6 +1644,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
     }
 
     _showPersonalizedRedirect() {
+      mirraSpeak("okay, we know you a little. here's what might actually help.")
       const screen = buildPersonalizedRedirectScreen(
         () => {
           this._removeStandaloneOverlay()
@@ -1660,7 +1720,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       document.body.style.overflow = 'hidden'
       document.documentElement.appendChild(this._root)
 
-      this._showBreakupActivated()
+      this._showStage1()
     }
 
     _setContent(el) {
@@ -1669,21 +1729,151 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       this._wrapper.appendChild(el)
     }
 
-    _showBreakupActivated() {
+    _showStage1() {
+      mirraSpeak("hey. you've been back a few times. is it actually giving you what you need?")
       const el = document.createElement('div')
       el.className = 'mirra-screen'
       el.innerHTML = `
         <div class="mirra-big-emoji">\uD83D\uDC94</div>
-        <h2>Breakup Mode Activated</h2>
-        <p class="mirra-subtext">You\u2019ve bypassed Mirra 3 times this session.<br>It\u2019s time to take a step back.</p>
-        <p class="mirra-subtext" style="margin-top:12px;font-size:13px;color:rgba(139,136,152,0.5);">This tab will close in 10 seconds\u2026</p>
+        <h2>hey, you\u2019ve been back a few times today</h2>
+        <p class="mirra-subtext">just checking \u2014 is Instagram actually giving you what you\u2019re looking for?</p>
+        <div class="mirra-btn-row">
+          <button class="mirra-btn mirra-btn-primary" data-action="not-really">honestly... not really</button>
+          <button class="mirra-btn mirra-btn-secondary" data-action="need-it">I just need it rn</button>
+        </div>
       `
+      el.querySelector('[data-action="not-really"]').addEventListener('click', () => this._showStage2())
+      el.querySelector('[data-action="need-it"]').addEventListener('click', () => this._dismiss())
       this._setContent(el)
+    }
 
-      setTimeout(() => {
-        if (this._root) { this._root.remove(); this._root = null }
-        try { chrome.runtime.sendMessage({ type: 'CLOSE_TAB' }) } catch (_) {}
-      }, 10000)
+    _showStage2() {
+      mirraSpeak("that's worth sitting with. you're not alone in that.")
+      const el = document.createElement('div')
+      el.className = 'mirra-screen'
+      el.innerHTML = `
+        <h2>that\u2019s worth sitting with</h2>
+        <p class="mirra-subtext">a lot of people feel the pull even when the app leaves them feeling worse. you\u2019re not alone in that.</p>
+        <div class="mirra-btn-row">
+          <button class="mirra-btn mirra-btn-primary" data-action="break">I want to take a real break</button>
+          <button class="mirra-btn mirra-btn-secondary" data-action="later">maybe later</button>
+        </div>
+      `
+      el.querySelector('[data-action="break"]').addEventListener('click', () => this._showStage3())
+      el.querySelector('[data-action="later"]').addEventListener('click', () => this._dismiss())
+      this._setContent(el)
+    }
+
+    _showStage3() {
+      mirraSpeak("okay. how do you want to handle this?")
+      const el = document.createElement('div')
+      el.className = 'mirra-screen'
+      el.innerHTML = `
+        <h2>okay. how do you want to handle this?</h2>
+        <div class="mirra-option-card" data-action="24h">
+          <div class="mirra-option-icon">\uD83C\uDF05</div>
+          <div class="mirra-option-text">
+            <strong>take a 24-hour break</strong><br>
+            <span style="font-size:12px;color:rgba(139,136,152,0.5);">we\u2019ll hold it down. come back tomorrow.</span>
+          </div>
+        </div>
+        <div class="mirra-option-card" data-action="logout">
+          <div class="mirra-option-icon">\uD83D\uDCF5</div>
+          <div class="mirra-option-text">
+            <strong>log out on this device</strong><br>
+            <span style="font-size:12px;color:rgba(139,136,152,0.5);">remove the temptation. you can always log back in.</span>
+          </div>
+        </div>
+        <div class="mirra-option-card" data-action="note">
+          <div class="mirra-option-icon">\uD83D\uDC8C</div>
+          <div class="mirra-option-text">
+            <strong>write yourself a note first</strong><br>
+            <span style="font-size:12px;color:rgba(139,136,152,0.5);">what do you want to remember about why you\u2019re doing this?</span>
+          </div>
+        </div>
+      `
+      el.querySelector('[data-action="24h"]').addEventListener('click', () => {
+        const until = Date.now() + 86400000
+        chrome.storage.local.set({ breakUntil: until }, () => {
+          this._showStage4(false)
+        })
+      })
+      el.querySelector('[data-action="logout"]').addEventListener('click', () => {
+        this._showLogoutInstructions()
+      })
+      el.querySelector('[data-action="note"]').addEventListener('click', () => {
+        this._showNoteScreen()
+      })
+      this._setContent(el)
+    }
+
+    _showLogoutInstructions() {
+      const el = document.createElement('div')
+      el.className = 'mirra-screen'
+      el.innerHTML = `
+        <div class="mirra-big-emoji">\uD83D\uDCF5</div>
+        <h2>log out on this device</h2>
+        <p class="mirra-instructions">go to instagram.com \u2192 your profile \u2192 settings \u2192 log out. we\u2019ll still be here.</p>
+        <div class="mirra-btn-row">
+          <button class="mirra-btn mirra-btn-primary" data-action="done">got it \u2014 close this tab</button>
+        </div>
+      `
+      el.querySelector('[data-action="done"]').addEventListener('click', () => this._closeTab())
+      this._setContent(el)
+    }
+
+    _showNoteScreen() {
+      const el = document.createElement('div')
+      el.className = 'mirra-screen'
+      el.innerHTML = `
+        <div class="mirra-big-emoji">\uD83D\uDC8C</div>
+        <h2>what do you want to remember<br>about why you\u2019re doing this?</h2>
+        <textarea class="mirra-note-area" placeholder="write it here\u2026"></textarea>
+        <div class="mirra-btn-row">
+          <button class="mirra-btn mirra-btn-primary" data-action="save">save &amp; close</button>
+        </div>
+      `
+      el.querySelector('[data-action="save"]').addEventListener('click', () => {
+        const note = el.querySelector('.mirra-note-area').value.trim()
+        const payload = { breakupNoteSavedAt: Date.now() }
+        if (note) payload.breakupNote = note
+        chrome.storage.local.set(payload, () => {
+          this._showStage4(true)
+        })
+      })
+      this._setContent(el)
+    }
+
+    _showStage4(hasNote) {
+      mirraSpeak("that actually took guts. we'll be here when you're ready.")
+      const sub = hasNote
+        ? 'saved. we\u2019ll be here when you\u2019re back.'
+        : 'we\u2019ll be here when you\u2019re ready.'
+      const el = document.createElement('div')
+      el.className = 'mirra-screen'
+      el.innerHTML = `
+        <div class="mirra-big-emoji">\uD83D\uDC99</div>
+        <h2>that actually took guts.</h2>
+        <p class="mirra-subtext">${sub}</p>
+        <div class="mirra-btn-row">
+          <button class="mirra-btn mirra-btn-primary" data-action="close">close</button>
+        </div>
+      `
+      el.querySelector('[data-action="close"]').addEventListener('click', () => this._closeTab())
+      this._setContent(el)
+    }
+
+    _dismiss() {
+      breakupModeDoneThisSession = true
+      document.body.style.filter = ''
+      document.body.style.overflow = ''
+      if (this._root) { this._root.remove(); this._root = null }
+      if (this._onDismiss) this._onDismiss()
+    }
+
+    _closeTab() {
+      if (this._root) { this._root.remove(); this._root = null }
+      try { chrome.runtime.sendMessage({ type: 'CLOSE_TAB' }) } catch (_) {}
     }
   }
 
@@ -1767,7 +1957,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
           <div class="mirra-orb-mid"></div>
           <div class="mirra-orb-core"></div>
         </div>
-        <div class="mirra-status">Connecting\u2026</div>
+        <div class="mirra-status">give me a sec...</div>
         <div class="mirra-transcript"></div>
         <button class="mirra-bypass">Just let me in</button>
         <div class="mirra-brand">mirra</div>
@@ -1779,7 +1969,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       this.ambientEl = this.shadow.querySelector('.mirra-ambient')
       this.bypassBtn = this.shadow.querySelector('.mirra-bypass')
 
-      this.bypassBtn.addEventListener('click', () => this._triggerBreakup())
+      this.bypassBtn.addEventListener('click', () => this._letThrough())
 
       ;(document.documentElement || document.body).appendChild(this.root)
     }
@@ -1827,11 +2017,11 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
 
     _statusFromCode(code) {
       const map = {
-        connecting: 'Connecting\u2026',
-        connected:  'Connected',
-        speaking:   'Mirra is speaking\u2026',
-        listening:  'Mirra is listening\u2026',
-        error:      'Connection error',
+        connecting: 'give me a sec...',
+        connected:  'hey \u2728',
+        speaking:   'let me think...',
+        listening:  "I'm listening",
+        error:      'lost you for a sec',
       }
       this._setStatus(code, map[code] || '')
     }
@@ -1887,10 +2077,21 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       // First agent message is the opening line — skip classification
       if (this.agentTurnCount <= 1) return
 
-      // After the agent's SECOND response (the one that reacts to user mood),
-      // classify and show the visual screen
       if (!this.moodClassified && this.agentTurnCount >= 2) {
         const allUserText = this.userTranscripts.join(' ')
+
+        if (classifyBypass(allUserText)) {
+          this.moodClassified = true
+          this._letThrough()
+          return
+        }
+
+        if (CONFIG.HUME_ENABLED && humeDetector?.isConnected) {
+          this.moodClassified = true
+          humeDetector.analyzeTranscript(allUserText)
+          return
+        }
+
         const mood = classifyMoodFromTranscript(allUserText)
         this.moodClassified = true
         this._showMoodScreen(mood)
@@ -1902,13 +2103,9 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       this.userTranscripts.push(text)
       this.lastUserText = text
 
-      // Check for bypass keywords immediately
-      if (!this.moodClassified) {
-        const mood = classifyMoodFromTranscript(text)
-        if (mood === 'BYPASS') {
-          this.moodClassified = true
-          this._letThrough()
-        }
+      if (!this.moodClassified && classifyBypass(text)) {
+        this.moodClassified = true
+        this._letThrough()
       }
     }
 
@@ -1928,14 +2125,18 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       let screen
       switch (mood) {
         case 'STRESSED':
+          mirraSpeak("that sounds like a lot. let's take a second.")
           screen = buildStressedScreen(
-            () => this._letThrough(),                   // "Yes, I'm ready" → open Instagram
-            () => this._replaceScreen(                   // "Let me do something else"
-              buildPersonalizedRedirectScreen(
-                () => this._navigateAway(),              // card actions → close tab
-                () => this._letThrough()                 // "I still want to scroll" → let through
+            () => this._letThrough(),
+            () => {
+              mirraSpeak("okay, we know you a little. here's what might actually help.")
+              this._replaceScreen(
+                buildPersonalizedRedirectScreen(
+                  () => this._navigateAway(),
+                  () => this._letThrough()
+                )
               )
-            )
+            }
           )
           break
 
@@ -1944,19 +2145,21 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
           return
 
         case 'LOW_MOOD':
+          mirraSpeak("hey. I hear you. I'm right here.")
           screen = buildLowMoodScreen(
-            () => this._showSupportBlock(),              // "I need real support"
-            () => this._navigateAway(),                  // "I just need a moment" → close tab
-            () => this._letThrough()                     // "Open Instagram anyway"
+            () => this._showSupportBlock(),
+            () => this._navigateAway(),
+            () => this._letThrough()
           )
           break
 
         case 'NEUTRAL':
         default:
+          mirraSpeak("okay, got it. here's something you could do instead.")
           screen = buildNeutralScreen(
             this.lastUserText || 'just checking',
-            () => this._navigateAway(),                  // "Sounds good" → close tab
-            () => this._letThrough()                     // "I still want to open Instagram"
+            () => this._navigateAway(),
+            () => this._letThrough()
           )
           break
       }
@@ -1966,10 +2169,11 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
     }
 
     _startIntentionalMode() {
+      mirraSpeak("got it, go do your thing. I'll check back in.")
       this._unblurPage()
       if (this.root) { this.root.remove(); this.root = null }
       const timer = new MirraTimer()
-      timer.start(10)
+      timer.start(CONFIG.INTENTIONAL_MODE_DURATION)
     }
 
     _replaceScreen(newScreen) {
@@ -1996,21 +2200,18 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
       if (this.root) { this.root.remove(); this.root = null }
 
       bypassCount++
-      if (bypassCount >= 3 && !breakupDismissed) {
-        breakupDismissed = true
-        new MirraBreakup().show()
+      if (bypassCount >= CONFIG.BREAKUP_TRIGGER_COUNT && !breakupModeDoneThisSession) {
+        new MirraBreakup(() => {
+          this._unblurPage()
+          const timer = new MirraTimer()
+          timer.start(CONFIG.CHECK_IN_TIMER_DURATION)
+        }).show()
         return
       }
 
       this._unblurPage()
       const timer = new MirraTimer()
-      timer.start(10)
-    }
-
-    _triggerBreakup() {
-      if (this.client) { this.client.stop(); this.client = null }
-      if (this.root) { this.root.remove(); this.root = null }
-      new MirraBreakup().show()
+      timer.start(CONFIG.CHECK_IN_TIMER_DURATION)
     }
 
     _navigateAway() {
@@ -2032,6 +2233,7 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
    * ================================================================ */
 
   function showBreakEnforcementScreen() {
+    mirraSpeak("you said you needed a break. proud of you.")
     const root = document.createElement('div')
     root.id = 'mirra-break-root'
     root.style.cssText = 'position:fixed;inset:0;z-index:999999;'
@@ -2051,11 +2253,11 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
     screen.className = 'mirra-screen'
     screen.innerHTML = `
       <div class="mirra-big-emoji">\uD83D\uDC99</div>
-      <h2>You\u2019re on a break</h2>
-      <p class="mirra-subtext">You asked for this earlier. You\u2019re doing great.</p>
+      <h2>you\u2019re on a break</h2>
+      <p class="mirra-subtext">this was your call. proud of you.</p>
       <div class="mirra-btn-row">
-        <button class="mirra-btn mirra-btn-primary" data-action="keep">Keep the break</button>
-        <button class="mirra-btn mirra-btn-secondary" data-action="end">End break early</button>
+        <button class="mirra-btn mirra-btn-primary" data-action="keep">keeping it</button>
+        <button class="mirra-btn mirra-btn-secondary" data-action="end">I changed my mind</button>
       </div>
     `
     wrapper.appendChild(screen)
@@ -2100,6 +2302,25 @@ CONVERSATION LENGTH: Keep it to 2-3 exchanges max. This is a quick check-in, not
     } catch (_) {}
 
     const overlay = new MirraOverlay()
+
+    if (CONFIG.HUME_ENABLED) {
+      try {
+        const { humeApiKey } = await new Promise(res => chrome.storage.sync.get(['humeApiKey'], res))
+        if (humeApiKey) {
+          humeDetector = new HumeEmotionDetector(humeApiKey)
+          humeDetector.onEmotionDetected = (mood, confidence) => {
+            console.log(`[NYM] Hume detected: ${mood} (confidence: ${confidence.toFixed(2)})`)
+            overlay._showMoodScreen(mood)
+          }
+          await humeDetector.connect()
+        } else {
+          console.warn('[NYM] Hume enabled but no API key — falling back to keyword classifier')
+        }
+      } catch (_) {
+        console.warn('[NYM] Hume init failed — falling back to keyword classifier')
+      }
+    }
+
     overlay.init()
   })()
 
